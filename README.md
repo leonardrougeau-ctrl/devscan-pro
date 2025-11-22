@@ -45,9 +45,8 @@ python3 src/devscan_pro.py
 
 # Run directly
 python3 src/devscan_pro.py
-Method 2: Download from Website
 
-### Method 2 Download from website
+Method 2: Download from Website
 Visit: https://clearwatercodes.com/
 
 ## 🔑 License Activation
