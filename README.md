@@ -36,13 +36,19 @@ A comprehensive tool to scan, detect, and manage development tools on Ubuntu sys
 ## 🚀 Quick Start
 
 ### Installation
+### Method 1: Clone from GitHub
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/devscan-pro.git
+git clone https://github.com/leonardrougeau-ctrl/devscan-pro.git
 cd devscan-pro
+python3 src/devscan_pro.py
 
 # Run directly
 python3 src/devscan_pro.py
+Method 2: Download from Website
+
+### Method 2 Download from website
+Visit: https://clearwatercodes.com/
 
 ## 🔑 License Activation
 
@@ -58,8 +64,8 @@ DevScan Pro requires a license key for full functionality.
 ### Trial Version:
 - 30-day free trial
 - 5 export limit
-- All scanning features included
-- Upgrade to full version for unlimited exports
+- Lifetime licenses available
+- Personal ($29), Team ($99), Enterprise ($249)
 
 ### Purchase License:
-Visit: https://devscan.pro/purchase
+Visit: https://devscan.pro/purchase](https://clearwatercodes.com
