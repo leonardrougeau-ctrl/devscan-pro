@@ -11,23 +11,29 @@ import json
 import shutil
 import hashlib
 import requests
+import uuid
 from pathlib import Path
 
 class LicenseValidator:
     def __init__(self):
-        self.validation_url = "https://api.devscan.pro/validate"
-        self.activation_url = "https://api.devscan.pro/activate"
+        # CHANGE TO YOUR SERVER
+        self.validation_url = "https://clearwatercodes.com/license_manager/api/validate"
+        self.activation_url = "https://clearwatercodes.com/license_manager/api/validate"  # Same endpoint
         self.app_name = "DevScan_Pro"
         self.license_file = Path.home() / ".devscan_pro_license.json"
-        
+                           
     def validate_license(self, license_key):
         """Validate license against your server"""
         try:
+            # Add system fingerprint to prevent key sharing
+            system_fingerprint = self.get_system_fingerprint()
+            
             response = requests.post(
                 self.validation_url,
                 json={
                     "key": license_key,
-                    "app_name": self.app_name
+                    "app_name": self.app_name,
+                    "system_id": system_fingerprint  # Add fingerprint
                 },
                 timeout=10
             )
@@ -106,6 +112,26 @@ class LicenseValidator:
         except:
             return False
 
+    def get_system_fingerprint(self):
+        """Generate unique system fingerprint to prevent key sharing"""
+        try:
+            # Method 1: Use machine-id (Linux systems)
+            if os.path.exists('/etc/machine-id'):
+                with open('/etc/machine-id', 'r') as f:
+                    machine_id = f.read().strip()
+                return hashlib.md5(machine_id.encode()).hexdigest()
+            
+            # Method 2: Use hostname and MAC address as fallback
+            hostname = platform.node()
+            mac_address = ':'.join(['{:02x}'.format((uuid.getnode() >> elements) & 0xff) 
+                                   for elements in range(0,8*6,8)][::-1])
+            system_info = f"{hostname}-{mac_address}"
+            return hashlib.md5(system_info.encode()).hexdigest()
+            
+        except Exception as e:
+            # Final fallback - less secure but better than nothing
+            return hashlib.md5(str(uuid.getnode()).encode()).hexdigest()
+
 class DevScanPro:
     def __init__(self, root):
         self.root = root
@@ -168,7 +194,7 @@ class DevScanPro:
             "CMake": {"package": "cmake", "manager": "apt"},
             "pip": {"package": "python3-pip", "manager": "apt"},
             "pip3": {"package": "python3-pip", "manager": "apt"},
-            
+           
             # Containers & Virtualization
             "Docker": {"package": "docker.io", "manager": "apt"},
             "Docker Compose": {"package": "docker-compose", "manager": "apt"},
@@ -285,13 +311,28 @@ class DevScanPro:
                                             padx=15, pady=8)
         self.selective_export_btn.pack(side=tk.LEFT, padx=(0, 10))
         
-        # License button
-        self.license_btn = tk.Button(button_frame, text="🔑 License", 
-                                   command=self.show_license_info,
-                                   bg='#ff9800', fg='white',
-                                   font=("Ubuntu", 12, "bold"),
-                                   padx=15, pady=8)
-        self.license_btn.pack(side=tk.LEFT)
+        # License activation text box (replaces the license button)
+        license_activation_frame = tk.Frame(button_frame, bg='#2d2d2d')
+        license_activation_frame.pack(side=tk.LEFT, padx=5)
+
+        self.license_var = tk.StringVar()
+        self.license_entry = tk.Entry(
+            license_activation_frame,
+            textvariable=self.license_var,
+            width=25,
+            font=('Arial', 10),
+            bg='#1e1e1e',
+            fg='#888888',
+            relief='flat',
+            insertbackground='white'
+        )
+        self.license_entry.insert(0, "Enter license code here...")
+        self.license_entry.pack(pady=5, padx=10)
+
+        # Bind events for placeholder text and real-time validation
+        self.license_entry.bind('<FocusIn>', self.clear_license_placeholder)
+        self.license_entry.bind('<FocusOut>', self.restore_license_placeholder)
+        self.license_var.trace('w', self.validate_license_real_time)
 
         # Category filter
         filter_frame = tk.Frame(main_frame, bg='#2b2b2b')
@@ -307,8 +348,8 @@ class DevScanPro:
                           value=category, bg='#2b2b2b', fg='#ffffff',
                           selectcolor='#2b2b2b', font=("Ubuntu", 9),
                           command=self.apply_filter).pack(side=tk.LEFT, padx=5)
-
-        # Results frame with scrollbar
+            
+            # Results frame with scrollbar
         results_container = ttk.Frame(main_frame)
         results_container.pack(fill=tk.BOTH, expand=True)
 
@@ -346,8 +387,88 @@ class DevScanPro:
         # Auto-check on startup
         self.root.after(1000, self.check_tools)
 
+    # LICENSE TEXT BOX METHODS
+    def clear_license_placeholder(self, event):
+        if self.license_entry.get() == "Enter license code here...":
+            self.license_entry.delete(0, tk.END)
+            self.license_entry.configure(fg='#ffffff')
+
+    def restore_license_placeholder(self, event):
+        if not self.license_entry.get():
+            self.license_entry.insert(0, "Enter license code here...")
+            self.license_entry.configure(fg='#888888')
+
+    def validate_license_real_time(self, *args):
+        license_key = self.license_var.get().strip()
+        
+        # Skip validation if it's placeholder text or too short
+        if (license_key == "Enter license code here..." or 
+            len(license_key) < 10 or 
+            not license_key):
+            return
+            
+        # Validate license when user stops typing (debounce)
+        if hasattr(self, '_license_validation_job'):
+            self.root.after_cancel(self._license_validation_job)
+        
+        self._license_validation_job = self.root.after(1000, lambda: self.do_license_validation(license_key))
+
+    def do_license_validation(self, license_key):
+        is_valid, message, customer = self.validate_license_server(license_key)
+        if is_valid:
+            self.activated = True
+            self.license_key = license_key.upper()
+            self.save_license_data()
+            self.license_entry.configure(fg='#00ff00')  # Green for success
+            # Show success message
+            self.status_label.config(text="✅ License activated! All features unlocked.", fg='#00ff00')
+            
+            self.refresh_ui_after_activation()
+        
+            # Optionally hide the entry after successful activation
+            self.root.after(3000, self.hide_license_entry)
+        else:
+            self.license_entry.configure(fg='#ff4444')  # Red for error
+            self.status_label.config(text="❌ Invalid license key", fg='#ff4444')
+            self.root.after(3000, self.clear_license_entry)
+
+    def refresh_ui_after_activation(self):
+        """Refresh UI elements to show licensed status"""
+        # Update the header title
+        trial_status = self.get_trial_status()
+        title_text = f"🔧 {self.app_name} - {trial_status}"
+        
+        # You might need to update the title label directly
+        # This depends on how your header is structured
+        for widget in self.root.winfo_children():
+            if isinstance(widget, tk.Frame):
+                for child in widget.winfo_children():
+                    if isinstance(child, tk.Label) and "🔧" in child.cget("text"):
+                        child.config(text=title_text)
+                        break  
+        else:
+            self.license_entry.configure(fg='#ff4444')  # Red for error
+            self.status_label.config(text="❌ Invalid license key", fg='#ff4444')
+            self.root.after(3000, self.clear_license_entry)
+
+    def hide_license_entry(self):
+        # Hide the license entry after successful activation
+        self.license_entry.pack_forget()
+
+    def clear_license_entry(self):
+        # CORRECTED: Only 3 lines - no corrupted code!
+        self.license_var.set("")
+        self.restore_license_placeholder(None)
+        self.status_label.config(text="Ready to check development tools", fg='#00ff00')
+
+    # LICENSE SYSTEM METHODS
     def initialize_license_system(self):
         """Initialize or load trial data"""
+        print("DEBUG: Initializing license system...")
+        
+        # Create licenses directory if it doesn't exist
+        os.makedirs(self.licenses_dir, exist_ok=True)
+        
         if os.path.exists(self.license_file):
             try:
                 with open(self.license_file, 'r') as f:
@@ -356,17 +477,28 @@ class DevScanPro:
                     self.export_count = data.get('export_count', 0)
                     self.activated = data.get('activated', False)
                     self.license_key = data.get('license_key', '')
-            except:
+                print(f"DEBUG: Loaded license data - activated: {self.activated}")
+            except Exception as e:
+                print(f"DEBUG: Error loading license file: {e}")
                 self.reset_trial_data()
         else:
+            print("DEBUG: No license file found, creating new trial data")
             self.reset_trial_data()
         
         # Check if activated via license server
-        server_license_info = self.license_validator.get_license_info()
-        if server_license_info and server_license_info.get('license_key'):
-            self.activated = True
-            self.license_key = server_license_info['license_key']
-            self.save_license_data()
+        try:
+            server_license_info = self.license_validator.get_license_info()
+            print(f"DEBUG: Server license info: {server_license_info}")
+            
+            if server_license_info and server_license_info.get('license_key'):
+                print("DEBUG: Found server license, activating...")
+                self.activated = True
+                self.license_key = server_license_info['license_key']
+                self.save_license_data()
+        except Exception as e:
+            print(f"DEBUG: Server license check failed: {e}")
+        
+        print(f"DEBUG: License initialization complete - activated: {self.activated}")
 
     def reset_trial_data(self):
         """Reset trial data for new installation"""
@@ -425,7 +557,7 @@ class DevScanPro:
                 "Trial Expired", 
                 "Your 30-day trial has expired.\n\n"
                 "Please purchase a license to continue using DevScan Pro.\n\n"
-                "Visit: https://devscan.pro/purchase"
+                "Visit: https://clearwatercodes.com/purchase"
             )
             return False
         
@@ -435,7 +567,7 @@ class DevScanPro:
                 "Export Limit Reached", 
                 f"You have reached the maximum of {self.max_exports} exports in the trial version.\n\n"
                 "Please purchase a license for unlimited exports.\n\n"
-                "Visit: https://devscan.pro/purchase"
+                "Visit: https://clearwatercodes.com/purchase"
             )
             return False
         
@@ -478,7 +610,7 @@ After trial:
 • Priority support
 
 Activate License:
-Click 'Enter License Key' to activate your purchased license."""
+Enter your license key in the text box above."""
 
         # Create license dialog
         license_window = tk.Toplevel(self.root)
@@ -500,12 +632,7 @@ Click 'Enter License Key' to activate your purchased license."""
         button_frame = tk.Frame(license_window, bg='#2b2b2b')
         button_frame.pack(fill=tk.X, padx=20, pady=10)
         
-        if not self.activated:
-            activate_btn = tk.Button(button_frame, text="Enter License Key", 
-                                   command=self.activate_license,
-                                   bg='#4CAF50', fg='white',
-                                   font=("Ubuntu", 10, "bold"))
-            activate_btn.pack(side=tk.LEFT, padx=(0, 10))
+        # REMOVED: The activate button since we now have the text box
         
         purchase_btn = tk.Button(button_frame, text="Purchase License", 
                                command=self.open_purchase_page,
@@ -552,7 +679,7 @@ Click 'Enter License Key' to activate your purchased license."""
     def open_purchase_page(self):
         """Open purchase page in browser"""
         import webbrowser
-        webbrowser.open("https://devscan.pro/purchase")
+        webbrowser.open("https://clearwatercodes.com/purchase")
         messagebox.showinfo("Purchase DevScan Pro", 
                           "Opening purchase page in your browser...\n\n"
                           "After purchase, you will receive your license key via email.")
@@ -566,7 +693,8 @@ Click 'Enter License Key' to activate your purchased license."""
         except:
             pass
         return platform.version()
-
+    
+        # UI SCROLLING METHODS
     def _bind_mouse_wheel(self):
         """Bind mouse wheel events for scrolling"""
         self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)
@@ -591,6 +719,7 @@ Click 'Enter License Key' to activate your purchased license."""
     def _on_canvas_configure(self, event):
         self.canvas.itemconfig(self.canvas_window, width=event.width)
 
+    # TOOL CHECKING METHODS
     def check_tool(self, command, name, category="System", check_type="version"):
         try:
             if check_type == "version":
@@ -639,7 +768,6 @@ Click 'Enter License Key' to activate your purchased license."""
         self.export_btn.config(state='disabled')
         self.copy_btn.config(state='disabled')
         self.info_btn.config(state='disabled')
-        self.license_btn.config(state='disabled')
         self.export_script_btn.config(state='disabled')
         self.selective_export_btn.config(state='disabled')
         self.status_label.config(text="Scanning system for development tools...", fg='#ffff00')
@@ -745,7 +873,6 @@ Click 'Enter License Key' to activate your purchased license."""
         self.export_btn.config(state='normal')
         self.copy_btn.config(state='normal')
         self.info_btn.config(state='normal')
-        self.license_btn.config(state='normal')
         self.export_script_btn.config(state='normal')
         self.selective_export_btn.config(state='normal')
         
@@ -817,7 +944,8 @@ Click 'Enter License Key' to activate your purchased license."""
                     'status': status,
                     'category': category
                 }
-    
+
+        # SYSTEM INFO AND EXPORT METHODS
     def show_system_info(self):
         try:
             system_info = f"""System Information:
@@ -1005,6 +1133,7 @@ License:
         except Exception as e:
             self.status_label.config(text=f"❌ Copy failed: {str(e)}", fg='#ff4444')
 
+        # SELECTIVE EXPORT METHODS
     def show_selective_export_dialog(self):
         """Show dialog for selecting tools to export"""
         if not self.all_results:
@@ -1289,6 +1418,7 @@ License:
         with open(filename, 'w') as f:
             json.dump(report, f, indent=2)
 
+    # INSTALLATION SCRIPT METHODS
     def export_installation_script(self):
         """Export installation script for missing tools"""
         if not self.check_trial_limits():
@@ -1479,11 +1609,11 @@ Tools that will be installed:
         if messagebox.askyesno("Open Location", "Do you want to open the script location in file manager?"):
             subprocess.run(["xdg-open", os.path.dirname(filename)])
 
-    def main():
-        """Main entry point for package"""
-        root = tk.Tk()
-        app = DevScanPro(root)
-        root.mainloop()
+def main():
+    """Main entry point for package"""
+    root = tk.Tk()
+    app = DevScanPro(root)
+    root.mainloop()
 
-    if __name__ == "__main__":
-        main()
+if __name__ == "__main__":
+    main()
